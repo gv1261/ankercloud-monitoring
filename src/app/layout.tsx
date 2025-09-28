@@ -7,23 +7,18 @@ import { AuthProvider } from "@/contexts/AuthContext";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AnkerCloud Monitoring - Enterprise Infrastructure Monitoring",
-  description: "Professional server, website, network, and database monitoring platform",
-  keywords: "monitoring, server monitoring, website monitoring, uptime, infrastructure",
+  title: "AnkerCloud Monitoring - Light Dashboard",
+  description: "Enterprise monitoring platform with light theme",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark">
-      <ClientBody className={inter.className}>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
-      </ClientBody>
+    <html lang="en" className="light">
+      <body className={inter.className}>
+        <ClientBody>
+          <AuthProvider>{children}</AuthProvider>
+        </ClientBody>
+      </body>
     </html>
   );
 }

@@ -253,63 +253,64 @@ const alertRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // Get incidents
-  fastify.get('/incidents', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
-    const userId = request.user.id;
-    const { state, severity, resourceId } = request.query as any;
+fastify.get('/incidents', {
+  onRequest: [fastify.authenticate],
+}, async (request: any, reply) => {
+  const userId = request.user.id;
+  const { state, severity, resourceId } = request.query as any;
 
-    let queryText = `
-      SELECT i.*, ap.name as policy_name, r.name as resource_name, r.type as resource_type
-      FROM ankercloud.incidents i
-      JOIN ankercloud.alert_policies ap ON i.alert_policy_id = ap.id
-      JOIN ankercloud.resources r ON i.resource_id = r.id
-      WHERE ap.user_id = $1
-    `;
+  let queryText = `
+    SELECT i.*, ap.name as policy_name, r.name as resource_name, r.type as resource_type
+    FROM ankercloud.incidents i
+    JOIN ankercloud.alert_policies ap ON i.alert_policy_id = ap.id
+    JOIN ankercloud.resources r ON i.resource_id = r.id
+    WHERE ap.user_id = $1
+  `;
 
-    const params: any[] = [userId];
-    let paramCount = 1;
+  const params: any[] = [userId];
+  let paramCount = 1;
 
-    if (state) {
-      paramCount++;
-      queryText += ` AND i.state = $${paramCount}`;
-      params.push(state);
-    }
+  if (state) {
+    paramCount++;
+    queryText += ` AND i.state = $${paramCount}`;
+    params.push(state);
+  }
 
-    if (severity) {
-      paramCount++;
-      queryText += ` AND i.severity = $${paramCount}`;
-      params.push(severity);
-    }
+  if (severity) {
+    paramCount++;
+    queryText += ` AND i.severity = $${paramCount}`;
+    params.push(severity);
+  }
 
-    if (resourceId) {
-      paramCount++;
-      queryText += ` AND i.resource_id = $${paramCount}`;
-      params.push(resourceId);
-    }
+  if (resourceId) {
+    paramCount++;
+    queryText += ` AND i.resource_id = $${paramCount}`;
+    params.push(resourceId);
+  }
 
-    queryText += ' ORDER BY i.triggered_at DESC LIMIT 100';
+  queryText += ' ORDER BY i.triggered_at DESC LIMIT 100';
 
-    const result = await query(queryText, params);
+  const result = await query(queryText, params);
 
-    return reply.send({
-      incidents: result.rows.map(row => ({
-        id: row.id,
-        policyId: row.alert_policy_id,
-        policyName: row.policy_name,
-        resourceId: row.resource_id,
-        resourceName: row.resource_name,
-        resourceType: row.resource_type,
-        state: row.state,
-        severity: row.severity,
-        triggeredValue: row.triggered_value,
-        triggeredAt: row.triggered_at,
-        resolvedAt: row.resolved_at,
-        acknowledgedAt: row.acknowledged_at,
-        notes: row.notes,
-      })),
-    });
+  return reply.send({
+    incidents: result.rows.map(row => ({
+      id: row.id,
+      policyId: row.alert_policy_id,
+      policyName: row.policy_name,
+      resourceId: row.resource_id,
+      resourceName: row.resource_name,
+      resourceType: row.resource_type,
+      state: row.state,
+      severity: row.severity,
+      triggeredValue: row.triggered_value,
+      triggeredAt: row.triggered_at,
+      resolvedAt: row.resolved_at,
+      acknowledgedAt: row.acknowledged_at,
+      notes: row.notes,
+    })),
   });
+});
+
 
   // Acknowledge incident
   fastify.post('/incidents/:id/acknowledge', {

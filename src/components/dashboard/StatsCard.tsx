@@ -10,9 +10,18 @@ interface StatsCardProps {
   trend?: "up" | "down" | "stable";
   trendValue?: string;
   status?: "online" | "warning" | "critical" | "offline";
+  onClick?: () => void; // ✅ add onClick here
 }
 
-export function StatsCard({ title, value, icon, trend, trendValue, status }: StatsCardProps) {
+export function StatsCard({
+  title,
+  value,
+  icon,
+  trend,
+  trendValue,
+  status,
+  onClick, // ✅ receive onClick
+}: StatsCardProps) {
   const getStatusColor = () => {
     switch (status) {
       case "online":
@@ -51,11 +60,12 @@ export function StatsCard({ title, value, icon, trend, trendValue, status }: Sta
   };
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+    <div
+      onClick={onClick} // ✅ attach onClick
+      className="cursor-pointer hover:bg-zinc-800/40 transition-all bg-zinc-900 border border-zinc-800 rounded-lg p-4"
+    >
       <div className="flex items-center justify-between mb-3">
-        <div className={`p-2 rounded-lg ${getStatusColor()}`}>
-          {icon}
-        </div>
+        <div className={`p-2 rounded-lg ${getStatusColor()}`}>{icon}</div>
         {trend && (
           <div className={`flex items-center gap-1 text-xs ${getTrendColor()}`}>
             {getTrendIcon()}
@@ -64,9 +74,13 @@ export function StatsCard({ title, value, icon, trend, trendValue, status }: Sta
         )}
       </div>
       <div>
-        <p className="text-2xl font-bold text-zinc-100">{value}</p>
+        <p className="text-2xl font-bold text-zinc-100">
+          {typeof value === "number" ? value.toFixed(2) + "%" : value}
+        </p>
         <p className="text-sm text-zinc-400 mt-1">{title}</p>
       </div>
     </div>
   );
 }
+
+export default StatsCard;

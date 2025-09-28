@@ -34,6 +34,15 @@ if (typeof window !== 'undefined') {
   }
 }
 
+// Request interceptor → attach token
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('authToken');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {

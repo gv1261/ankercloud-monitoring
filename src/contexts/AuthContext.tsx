@@ -76,6 +76,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await api.auth.login(email, password);
       setUser(response.user);
       router.push('/');
+      localStorage.setItem('authToken', response.token); // <-- Save token
+      setAuthToken(response.token); // apply to axios
     } catch (error: any) {
       setError(error.response?.data?.error || 'Login failed');
       throw error;
@@ -91,6 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await api.auth.register(email, password, fullName);
       setUser(response.user);
       router.push('/');
+      localStorage.setItem('authToken', response.token); // <-- Save token
+      setAuthToken(response.token); // apply to axios
     } catch (error: any) {
       setError(error.response?.data?.error || 'Registration failed');
       throw error;

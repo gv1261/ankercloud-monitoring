@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/fastify-jwt": "^0.4.3",
     "@types/node": "^20.11.17",
     "@types/pg": "^8.11.0",
     "@types/uuid": "^9.0.8",

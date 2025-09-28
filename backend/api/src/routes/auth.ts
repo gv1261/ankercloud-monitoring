@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
@@ -6,7 +7,26 @@ import { query } from '../database/connection';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 
-// Validation schemas
+// ------------------- Types -------------------
+export interface JwtPayload {
+  id: string;
+  email?: string;
+  role?: string;
+}
+
+export interface AuthRequest {
+  user?: { id: string; email: string };
+};
+interface UserRow {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  password_hash?: string | null;
+  is_active?: boolean;
+}
+
+// ------------------- Zod Schemas -------------------
 const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -24,28 +44,35 @@ const createApiKeySchema = z.object({
   expiresAt: z.string().datetime().optional(),
 });
 
+// ------------------- Plugin -------------------
 const authRoutes: FastifyPluginAsync = async (fastify) => {
-  // Register new user
+  // JWT authenticate decorator
+fastify.decorate(
+  'authenticate',
+  async (request, reply) => {
+  try {
+  const user = (await request.jwtVerify()) as JwtPayload;
+    (request as any).user = user;
+  } catch (err) {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+}
+);
+  // ----------- Register -----------
   fastify.post('/register', async (request, reply) => {
     try {
       const body = registerSchema.parse(request.body);
-
-      // Check if user exists
       const existingUser = await query(
         'SELECT id FROM ankercloud.users WHERE email = $1',
         [body.email]
       );
 
       if (existingUser.rows.length > 0) {
-        return reply.code(400).send({
-          error: 'User with this email already exists',
-        });
+        return reply.code(400).send({ error: 'User with this email already exists' });
       }
 
-      // Hash password
       const passwordHash = await bcrypt.hash(body.password, 10);
 
-      // Create user
       const result = await query(
         `INSERT INTO ankercloud.users (email, password_hash, full_name)
          VALUES ($1, $2, $3)
@@ -53,9 +80,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         [body.email, passwordHash, body.fullName]
       );
 
-      const user = result.rows[0];
+      const user: UserRow = result.rows[0];
 
-      // Generate JWT token
       const token = fastify.jwt.sign({
         id: user.id,
         email: user.email,
@@ -73,27 +99,20 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         },
         token,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({
-          error: 'Validation error',
-          details: error.errors,
-        });
+        return reply.code(400).send({ error: 'Validation error', details: error.errors });
       }
-
       logger.error('Registration error:', error);
-      return reply.code(500).send({
-        error: 'Internal server error',
-      });
+      return reply.code(500).send({ error: 'Internal server error' });
     }
   });
 
-  // Login
+  // ----------- Login -----------
   fastify.post('/login', async (request, reply) => {
     try {
       const body = loginSchema.parse(request.body);
 
-      // Get user
       const result = await query(
         `SELECT id, email, password_hash, full_name, role, is_active
          FROM ankercloud.users
@@ -102,36 +121,22 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       );
 
       if (result.rows.length === 0) {
-        return reply.code(401).send({
-          error: 'Invalid email or password',
-        });
+        return reply.code(401).send({ error: 'Invalid email or password' });
       }
 
-      const user = result.rows[0];
+      const user: UserRow = result.rows[0];
 
-      // Check if user is active
       if (!user.is_active) {
-        return reply.code(403).send({
-          error: 'Account is disabled',
-        });
+        return reply.code(403).send({ error: 'Account is disabled' });
       }
 
-      // Verify password
-      const validPassword = await bcrypt.compare(body.password, user.password_hash);
-
+      const validPassword = await bcrypt.compare(body.password, user.password_hash ?? '');
       if (!validPassword) {
-        return reply.code(401).send({
-          error: 'Invalid email or password',
-        });
+        return reply.code(401).send({ error: 'Invalid email or password' });
       }
 
-      // Update last login
-      await query(
-        'UPDATE ankercloud.users SET last_login = NOW() WHERE id = $1',
-        [user.id]
-      );
+      await query('UPDATE ankercloud.users SET last_login = NOW() WHERE id = $1', [user.id]);
 
-      // Generate JWT token
       const token = fastify.jwt.sign({
         id: user.id,
         email: user.email,
@@ -149,26 +154,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         },
         token,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({
-          error: 'Validation error',
-          details: error.errors,
-        });
+        return reply.code(400).send({ error: 'Validation error', details: error.errors });
       }
-
       logger.error('Login error:', error);
-      return reply.code(500).send({
-        error: 'Internal server error',
-      });
+      return reply.code(500).send({ error: 'Internal server error' });
     }
   });
 
-  // Verify token
-  fastify.get('/verify', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
-    const userId = request.user.id;
+  // ----------- Verify Token -----------
+  fastify.get('/verify', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const authRequest = request as AuthRequest;
+    const userId = authRequest.user.id;
 
     const result = await query(
       `SELECT id, email, full_name, role
@@ -178,12 +176,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     );
 
     if (result.rows.length === 0) {
-      return reply.code(401).send({
-        error: 'Invalid token',
-      });
+      return reply.code(401).send({ error: 'Invalid token' });
     }
 
-    const user = result.rows[0];
+    const user: UserRow = result.rows[0];
 
     return reply.send({
       user: {
@@ -195,19 +191,16 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  // Create API key
-  fastify.post('/api-keys', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
+  // ----------- Create API Key -----------
+  fastify.post('/api-keys', { onRequest: [fastify.authenticate] }, async (request, reply) => {
     try {
+      const authRequest = request as AuthRequest;
       const body = createApiKeySchema.parse(request.body);
-      const userId = request.user.id;
+      const userId = authRequest.user.id;
 
-      // Generate API key
       const apiKey = `${config.api.keyPrefix}${uuidv4().replace(/-/g, '')}`;
       const keyHash = await bcrypt.hash(apiKey, 10);
 
-      // Store API key
       const result = await query(
         `INSERT INTO ankercloud.api_keys
          (user_id, key_hash, name, permissions, expires_at)
@@ -229,7 +222,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         apiKey: {
           id: apiKeyRecord.id,
-          key: apiKey, // Only shown once
+          key: apiKey,
           name: apiKeyRecord.name,
           permissions: apiKeyRecord.permissions,
           expiresAt: apiKeyRecord.expires_at,
@@ -237,26 +230,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         },
         message: 'Save this API key securely. It will not be shown again.',
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({
-          error: 'Validation error',
-          details: error.errors,
-        });
+        return reply.code(400).send({ error: 'Validation error', details: error.errors });
       }
-
       logger.error('API key creation error:', error);
-      return reply.code(500).send({
-        error: 'Internal server error',
-      });
+      return reply.code(500).send({ error: 'Internal server error' });
     }
   });
 
-  // List API keys
-  fastify.get('/api-keys', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
-    const userId = request.user.id;
+  // ----------- List API Keys -----------
+  fastify.get('/api-keys', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const authRequest = request as AuthRequest;
+    const userId = authRequest.user.id;
 
     const result = await query(
       `SELECT id, name, permissions, last_used, expires_at, is_active, created_at
@@ -267,7 +253,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     );
 
     return reply.send({
-      apiKeys: result.rows.map(key => ({
+      apiKeys: result.rows.map((key: any) => ({
         id: key.id,
         name: key.name,
         permissions: key.permissions,
@@ -279,12 +265,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  // Revoke API key
-  fastify.delete('/api-keys/:id', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
-    const userId = request.user.id;
-    const keyId = request.params.id;
+  // ----------- Revoke API Key -----------
+  fastify.delete('/api-keys/:id', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const authRequest = request as AuthRequest;
+    const userId = authRequest.user.id;
+    const keyId = (request.params as { id: string }).id;
 
     const result = await query(
       `UPDATE ankercloud.api_keys
@@ -295,37 +280,28 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     );
 
     if (result.rows.length === 0) {
-      return reply.code(404).send({
-        error: 'API key not found',
-      });
+      return reply.code(404).send({ error: 'API key not found' });
     }
 
     logger.info(`API key revoked: ${keyId} by user ${userId}`);
 
-    return reply.send({
-      message: 'API key revoked successfully',
-    });
+    return reply.send({ message: 'API key revoked successfully' });
   });
 
-  // Logout (client-side token removal, but we can track it)
-  fastify.post('/logout', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
-    const userId = request.user.id;
+  // ----------- Logout -----------
+  fastify.post('/logout', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const authRequest = request as AuthRequest;
+    const userId = authRequest.user.id;
 
-    // Log the logout event
     await query(
       `INSERT INTO ankercloud.audit_logs (user_id, action, details)
        VALUES ($1, $2, $3)`,
       [userId, 'logout', JSON.stringify({ timestamp: new Date() })]
     );
 
-    logger.info(`User logged out: ${request.user.email}`);
+    logger.info(`User logged out: ${authRequest.user.email}`);
 
-    return reply.send({
-      message: 'Logged out successfully',
-    });
+    return reply.send({ message: 'Logged out successfully' });
   });
 };
-
 export default authRoutes;

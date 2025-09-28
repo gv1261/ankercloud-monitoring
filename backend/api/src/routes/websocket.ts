@@ -2,24 +2,26 @@ import { FastifyPluginAsync } from 'fastify';
 import { getSubClient, readFromStream } from '../utils/redis';
 import { logger } from '../utils/logger';
 
+interface JwtPayload {
+  id: string;
+}
+
 const websocketHandler: FastifyPluginAsync = async (fastify) => {
-  fastify.get('/metrics', { websocket: true }, async (connection, req) => {
+  fastify.get('/metrics', { websocket: true }, async (connection, _req) => {
     const socket = connection.socket;
 
-    // Authentication via query param or initial message
     let authenticated = false;
     let userId: string | null = null;
     let subscriptions: string[] = [];
-    let streamReaders: Map<string, NodeJS.Timer> = new Map();
+    let streamReaders: Map<string, NodeJS.Timeout> = new Map();
 
     socket.on('message', async (message) => {
       try {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'auth') {
-          // Verify JWT token
           try {
-            const decoded = fastify.jwt.verify(data.token);
+            const decoded = fastify.jwt.verify(data.token) as JwtPayload;
             userId = decoded.id;
             authenticated = true;
 
@@ -45,14 +47,12 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
           }));
           socket.close();
         } else if (data.type === 'subscribe') {
-          // Subscribe to resource metrics
           const { resourceId, resourceType } = data;
           const streamKey = `metrics:${resourceType}:${resourceId}`;
 
           if (!subscriptions.includes(streamKey)) {
             subscriptions.push(streamKey);
 
-            // Start reading from stream
             const reader = setInterval(async () => {
               try {
                 const messages = await readFromStream(streamKey, '$');
@@ -68,7 +68,7 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
               } catch (error) {
                 logger.error(`Stream read error for ${streamKey}:`, error);
               }
-            }, 1000); // Poll every second
+            }, 1000);
 
             streamReaders.set(streamKey, reader);
 
@@ -81,7 +81,6 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
             logger.info(`User ${userId} subscribed to ${streamKey}`);
           }
         } else if (data.type === 'unsubscribe') {
-          // Unsubscribe from resource metrics
           const { resourceId, resourceType } = data;
           const streamKey = `metrics:${resourceType}:${resourceId}`;
 
@@ -89,7 +88,6 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
           if (index > -1) {
             subscriptions.splice(index, 1);
 
-            // Stop reading from stream
             const reader = streamReaders.get(streamKey);
             if (reader) {
               clearInterval(reader);
@@ -120,12 +118,10 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
     });
 
     socket.on('close', () => {
-      // Clean up subscriptions
-      for (const [streamKey, reader] of streamReaders) {
+      for (const [, reader] of streamReaders) {
         clearInterval(reader);
       }
       streamReaders.clear();
-
       logger.info(`WebSocket closed for user: ${userId}`);
     });
 
@@ -133,19 +129,17 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
       logger.error('WebSocket error:', error);
     });
 
-    // Send initial connection message
     socket.send(JSON.stringify({
       type: 'connected',
       message: 'Please authenticate',
     }));
   });
 
-  // Alerts WebSocket endpoint
-  fastify.get('/alerts', { websocket: true }, async (connection, req) => {
+  fastify.get('/alerts', { websocket: true }, async (connection, _req) => {
     const socket = connection.socket;
     let authenticated = false;
     let userId: string | null = null;
-    let alertSubscription: any = null;
+    let alertSubscription: string | null = null;
 
     socket.on('message', async (message) => {
       try {
@@ -153,17 +147,16 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
 
         if (data.type === 'auth') {
           try {
-            const decoded = fastify.jwt.verify(data.token);
+            const decoded = fastify.jwt.verify(data.token) as JwtPayload;
             userId = decoded.id;
             authenticated = true;
 
-            // Subscribe to user's alerts via Redis pub/sub
             const subClient = await getSubClient();
             alertSubscription = `alerts:${userId}`;
 
             await subClient.subscribe(alertSubscription);
 
-            subClient.on('message', (channel, message) => {
+            subClient.on('message', (channel: string, message: string) => {
               if (channel === alertSubscription) {
                 socket.send(message);
               }
@@ -210,7 +203,6 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
         const subClient = await getSubClient();
         await subClient.unsubscribe(alertSubscription);
       }
-
       logger.info(`Alert WebSocket closed for user: ${userId}`);
     });
 
@@ -224,11 +216,10 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
     }));
   });
 
-  // System status WebSocket (for global dashboard)
-  fastify.get('/status', { websocket: true }, async (connection, req) => {
+  fastify.get('/status', { websocket: true }, async (connection, _req) => {
     const socket = connection.socket;
     let authenticated = false;
-    let statusInterval: NodeJS.Timer | null = null;
+    let statusInterval: NodeJS.Timeout | null = null;
 
     socket.on('message', async (message) => {
       try {
@@ -236,12 +227,10 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
 
         if (data.type === 'auth') {
           try {
-            const decoded = fastify.jwt.verify(data.token);
+            fastify.jwt.verify(data.token) as JwtPayload;
             authenticated = true;
 
-            // Start sending system status updates
             statusInterval = setInterval(async () => {
-              // Get system stats (simplified for now)
               const stats = {
                 type: 'status',
                 timestamp: new Date().toISOString(),
@@ -251,9 +240,8 @@ const websocketHandler: FastifyPluginAsync = async (fastify) => {
                   cpu: process.cpuUsage(),
                 },
               };
-
               socket.send(JSON.stringify(stats));
-            }, 5000); // Every 5 seconds
+            }, 5000);
 
             socket.send(JSON.stringify({
               type: 'auth',

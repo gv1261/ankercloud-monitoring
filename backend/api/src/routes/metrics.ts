@@ -1,92 +1,112 @@
-import { FastifyPluginAsync } from 'fastify';
+import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { query } from '../database/connection';
-import { logger } from '../utils/logger';
+
+interface MetricsRequest extends FastifyRequest {
+  user: { id: string; role?: string; email?: string };
+  params: { resourceId?: string; type?: string };
+  query: {
+    startTime?: string;
+    endTime?: string;
+    interval?: string;
+  };
+  body?: any;
+}
 
 const metricsRoutes: FastifyPluginAsync = async (fastify) => {
-  // Get metrics for a resource
-  fastify.get('/:resourceId', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
+  // --- Single resource metrics ---
+  fastify.get('/:resourceId', { onRequest: [fastify.authenticate] }, async (request: MetricsRequest, reply: FastifyReply) => {
     const userId = request.user.id;
-    const resourceId = request.params.resourceId;
-    const {
-      startTime = new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-      endTime = new Date().toISOString(),
-      interval = '1m'
-    } = request.query as any;
+    const resourceId = request.params.resourceId!;
+    const startTime = request.query.startTime || new Date(Date.now() - 3600000).toISOString();
+    const endTime = request.query.endTime || new Date().toISOString();
+    const interval = request.query.interval || '1m';
 
-    // Verify resource ownership
-    const resourceCheck = await query(
-      'SELECT type FROM ankercloud.resources WHERE id = $1 AND user_id = $2',
-      [resourceId, userId]
-    );
+    // Fetch resource with ownership check
+    const resourceCheck = request.user.role === 'admin'
+      ? await query('SELECT id, name, type FROM ankercloud.resources WHERE id = $1', [resourceId])
+      : await query('SELECT id, name, type FROM ankercloud.resources WHERE id = $1 AND user_id = $2', [resourceId, userId]);
 
     if (resourceCheck.rows.length === 0) {
       return reply.code(404).send({ error: 'Resource not found' });
     }
 
-    const resourceType = resourceCheck.rows[0].type;
-    let metricsData;
+    const resource = resourceCheck.rows[0];
+    let metricsData: any[] = [];
 
-    if (resourceType === 'server') {
+    if (resource.type === 'server') {
       const result = await query(
         `SELECT
           time_bucket($1::interval, time) AS bucket,
-          AVG(cpu_usage_percent) as cpu,
-          AVG(memory_usage_percent) as memory,
-          AVG(disk_usage_percent) as disk,
-          MAX(network_in_bytes) as network_in,
-          MAX(network_out_bytes) as network_out
+          AVG(cpu_usage_percent) AS cpu,
+          AVG(memory_used_mb) AS memory_mb,
+          AVG(disk_used_mb) AS disk_mb
         FROM ankercloud.server_metrics
         WHERE resource_id = $2
           AND time >= $3::timestamptz
           AND time <= $4::timestamptz
         GROUP BY bucket
         ORDER BY bucket ASC`,
-        [interval, resourceId, startTime, endTime]
+        [interval, resource.id, startTime, endTime]
       );
       metricsData = result.rows;
-    } else if (resourceType === 'website') {
+    } else if (resource.type === 'website') {
       const result = await query(
         `SELECT
           time_bucket($1::interval, time) AS bucket,
-          AVG(response_time_ms) as response_time,
-          AVG(dns_time_ms) as dns_time,
-          AVG(connect_time_ms) as connect_time,
-          AVG(ttfb_ms) as ttfb,
-          COUNT(*) as checks,
-          SUM(CASE WHEN is_available THEN 1 ELSE 0 END) as successful
+          AVG(response_time_ms) AS response_time,
+          AVG(dns_time_ms) AS dns_time,
+          AVG(connect_time_ms) AS connect_time,
+          AVG(ttfb_ms) AS ttfb,
+          COUNT(*) AS checks,
+          SUM(CASE WHEN is_available THEN 1 ELSE 0 END) AS successful
         FROM ankercloud.website_metrics
         WHERE resource_id = $2
           AND time >= $3::timestamptz
           AND time <= $4::timestamptz
         GROUP BY bucket
         ORDER BY bucket ASC`,
-        [interval, resourceId, startTime, endTime]
+        [interval, resource.id, startTime, endTime]
       );
       metricsData = result.rows;
-    } else if (resourceType === 'network') {
+    } else if (resource.type === 'network') {
       const result = await query(
         `SELECT
           time_bucket($1::interval, time) AS bucket,
-          AVG(latency_ms) as latency,
-          AVG(packet_loss_percent) as packet_loss,
-          COUNT(*) as checks,
-          SUM(CASE WHEN is_available THEN 1 ELSE 0 END) as successful
+          AVG(latency_ms) AS latency,
+          AVG(packet_loss_percent) AS packet_loss,
+          COUNT(*) AS checks,
+          SUM(CASE WHEN is_available THEN 1 ELSE 0 END) AS successful
         FROM ankercloud.network_metrics
         WHERE resource_id = $2
           AND time >= $3::timestamptz
           AND time <= $4::timestamptz
         GROUP BY bucket
         ORDER BY bucket ASC`,
-        [interval, resourceId, startTime, endTime]
+        [interval, resource.id, startTime, endTime]
+      );
+      metricsData = result.rows;
+    } else if (resource.type === 'database') {
+      const result = await query(
+        `SELECT
+          time_bucket($1::interval, time) AS bucket,
+          AVG(cpu_usage_percent) AS cpu,
+          AVG(memory_used_mb) AS memory_mb,
+          AVG(active_connections) AS connections
+        FROM ankercloud.database_metrics
+        WHERE resource_id = $2
+          AND time >= $3::timestamptz
+          AND time <= $4::timestamptz
+        GROUP BY bucket
+        ORDER BY bucket ASC`,
+        [interval, resource.id, startTime, endTime]
       );
       metricsData = result.rows;
     }
 
     return reply.send({
-      resourceId,
-      resourceType,
+      resourceId: resource.id,
+      name: resource.name,
+      resourceType: resource.type,
       startTime,
       endTime,
       interval,
@@ -94,10 +114,101 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  // Get latest metrics for multiple resources
-  fastify.post('/latest', {
-    onRequest: [fastify.authenticate],
-  }, async (request: any, reply) => {
+  // --- Metrics for all resources of a type ---
+  fastify.get('/type/:type', { onRequest: [fastify.authenticate] }, async (request: MetricsRequest, reply: FastifyReply) => {
+    const userId = request.user.id;
+    const resourceType = request.params.type!;
+    const startTime = request.query.startTime || new Date(Date.now() - 3600000).toISOString();
+    const endTime = request.query.endTime || new Date().toISOString();
+    const interval = request.query.interval || '1m';
+
+    // Fetch resources by type
+    const resources = request.user.role === 'admin'
+      ? await query('SELECT id, name, type FROM ankercloud.resources WHERE type = $1', [resourceType])
+      : await query('SELECT id, name, type FROM ankercloud.resources WHERE type = $1 AND user_id = $2', [resourceType, userId]);
+
+    if (resources.rows.length === 0) {
+      return reply.code(404).send({ error: 'No resources found' });
+    }
+
+    const metricsData: any[] = [];
+
+    for (const resource of resources.rows) {
+      let result;
+      if (resource.type === 'server') {
+        result = await query(
+          `SELECT
+            time_bucket($1::interval, time) AS bucket,
+            AVG(cpu_usage_percent) AS cpu,
+            AVG(memory_used_mb) AS memory_mb,
+            AVG(disk_used_mb) AS disk_mb
+          FROM ankercloud.server_metrics
+          WHERE resource_id = $2
+            AND time >= $3::timestamptz
+            AND time <= $4::timestamptz
+          GROUP BY bucket
+          ORDER BY bucket ASC`,
+          [interval, resource.id, startTime, endTime]
+        );
+      } else if (resource.type === 'website') {
+        result = await query(
+          `SELECT
+            time_bucket($1::interval, time) AS bucket,
+            AVG(response_time_ms) AS response_time,
+            AVG(dns_time_ms) AS dns_time,
+            AVG(connect_time_ms) AS connect_time,
+            AVG(ttfb_ms) AS ttfb,
+            COUNT(*) AS checks,
+            SUM(CASE WHEN is_available THEN 1 ELSE 0 END) AS successful
+          FROM ankercloud.website_metrics
+          WHERE resource_id = $2
+            AND time >= $3::timestamptz
+            AND time <= $4::timestamptz
+          GROUP BY bucket
+          ORDER BY bucket ASC`,
+          [interval, resource.id, startTime, endTime]
+        );
+      } else if (resource.type === 'network') {
+        result = await query(
+          `SELECT
+            time_bucket($1::interval, time) AS bucket,
+            AVG(latency_ms) AS latency,
+            AVG(packet_loss_percent) AS packet_loss,
+            COUNT(*) AS checks,
+            SUM(CASE WHEN is_available THEN 1 ELSE 0 END) AS successful
+          FROM ankercloud.network_metrics
+          WHERE resource_id = $2
+            AND time >= $3::timestamptz
+            AND time <= $4::timestamptz
+          GROUP BY bucket
+          ORDER BY bucket ASC`,
+          [interval, resource.id, startTime, endTime]
+        );
+      } else if (resource.type === 'database') {
+        result = await query(
+          `SELECT
+            time_bucket($1::interval, time) AS bucket,
+            AVG(cpu_usage_percent) AS cpu,
+            AVG(memory_used_mb) AS memory_mb,
+            AVG(active_connections) AS connections
+          FROM ankercloud.database_metrics
+          WHERE resource_id = $2
+            AND time >= $3::timestamptz
+            AND time <= $4::timestamptz
+          GROUP BY bucket
+          ORDER BY bucket ASC`,
+          [interval, resource.id, startTime, endTime]
+        );
+      }
+
+      metricsData.push({ resourceId: resource.id, name: resource.name, data: result.rows });
+    }
+
+    return reply.send({ resources: metricsData });
+  });
+
+  // --- Latest metrics for multiple resources ---
+  fastify.post('/latest', { onRequest: [fastify.authenticate] }, async (request: MetricsRequest, reply: FastifyReply) => {
     const userId = request.user.id;
     const { resourceIds } = request.body as { resourceIds: string[] };
 
@@ -106,64 +217,74 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Verify resource ownership
-    const resourceCheck = await query(
-      `SELECT id, type FROM ankercloud.resources
-       WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-      [resourceIds, userId]
-    );
+    const resourceCheck =
+      request.user.role === 'admin'
+        ? await query(`SELECT id, name, type FROM ankercloud.resources WHERE id = ANY($1::uuid[])`, [resourceIds])
+        : await query(
+            `SELECT id, name, type FROM ankercloud.resources WHERE id = ANY($1::uuid[]) AND user_id = $2`,
+            [resourceIds, userId]
+          );
 
     const validResources = resourceCheck.rows;
-    const latestMetrics: any = {};
+    const latestMetrics: Record<string, any> = {};
 
     for (const resource of validResources) {
+      let result;
       if (resource.type === 'server') {
-        const result = await query(
+        result = await query(
           `SELECT * FROM ankercloud.server_metrics
            WHERE resource_id = $1
            ORDER BY time DESC
            LIMIT 1`,
           [resource.id]
         );
-        if (result.rows.length > 0) {
-          latestMetrics[resource.id] = {
-            type: 'server',
-            data: result.rows[0],
-          };
-        }
       } else if (resource.type === 'website') {
-        const result = await query(
+        result = await query(
           `SELECT * FROM ankercloud.website_metrics
            WHERE resource_id = $1
            ORDER BY time DESC
            LIMIT 1`,
           [resource.id]
         );
-        if (result.rows.length > 0) {
-          latestMetrics[resource.id] = {
-            type: 'website',
-            data: result.rows[0],
-          };
-        }
       } else if (resource.type === 'network') {
-        const result = await query(
+        result = await query(
           `SELECT * FROM ankercloud.network_metrics
            WHERE resource_id = $1
            ORDER BY time DESC
            LIMIT 1`,
           [resource.id]
         );
-        if (result.rows.length > 0) {
-          latestMetrics[resource.id] = {
-            type: 'network',
-            data: result.rows[0],
-          };
-        }
+      } else if (resource.type === 'database') {
+        result = await query(
+          `SELECT * FROM ankercloud.database_metrics
+           WHERE resource_id = $1
+           ORDER BY time DESC
+           LIMIT 1`,
+          [resource.id]
+        );
+      }
+
+      if (result && result.rows.length > 0) {
+        const row = result.rows[0];
+
+        latestMetrics[resource.id] = {
+          name: resource.name,
+          type: resource.type,
+          data: {
+            cpu_usage_percent: row.cpu_usage_percent ?? 0,
+            memory_used_mb: row.memory_used_mb ?? row.memory_usage_mb ?? 0,
+            memory_total_mb: row.memory_total_mb ?? row.memory_total_mb ?? 0,
+            disk_used_mb: row.disk_used_mb ?? 0,
+            disk_total_mb: row.disk_total_mb ?? 0,
+            network_usage_percent: row.network_usage_percent ?? 0,
+            db_cpu_percent: row.db_cpu_percent ?? 0,
+            time: row.time ?? new Date().toISOString(),
+          },
+        };
       }
     }
 
-    return reply.send({
-      metrics: latestMetrics,
-    });
+    return reply.send({ metrics: latestMetrics });
   });
 };
 

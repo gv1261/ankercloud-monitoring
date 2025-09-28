@@ -1,81 +1,71 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Activity, Server, Globe, Network, Database, AlertTriangle, CheckCircle, XCircle, Clock } from "lucide-react";
+import { useRouter } from "next/navigation"; // ✅ import this
+import { Activity, Server, Globe, Network, Database, AlertTriangle } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { ResourceList } from "@/components/dashboard/ResourceList";
 import { IncidentList } from "@/components/dashboard/IncidentList";
 import { RealtimeChart } from "@/components/dashboard/RealtimeChart";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
+import api from "@/lib/api";
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({
-    totalServers: 12,
-    totalWebsites: 8,
-    totalNetworks: 5,
-    totalDatabases: 3,
-    activeIncidents: 2,
-    uptime: 99.95,
-  });
+  const router = useRouter(); // ✅ initialize router
+  const [resources, setResources] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<any>({});
+  const [loading, setLoading] = useState(true);
 
-  const [resources, setResources] = useState([
-    {
-      id: "1",
-      name: "Production Server 1",
-      type: "server",
-      status: "online",
-      cpu: 45,
-      memory: 62,
-      disk: 38,
-      lastSeen: "2 mins ago",
-    },
-    {
-      id: "2",
-      name: "ankercloud.com",
-      type: "website",
-      status: "online",
-      responseTime: 245,
-      availability: 100,
-      lastCheck: "1 min ago",
-    },
-    {
-      id: "3",
-      name: "Database Primary",
-      type: "database",
-      status: "warning",
-      connections: 85,
-      queries: 1250,
-      lastSeen: "30 secs ago",
-    },
-  ]);
+  // Fetch all resources
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
 
-  const [incidents, setIncidents] = useState([
-    {
-      id: "1",
-      resourceName: "Database Primary",
-      severity: "warning",
-      message: "High connection count (85/100)",
-      triggeredAt: "10 mins ago",
-      state: "active",
-    },
-    {
-      id: "2",
-      resourceName: "Production Server 2",
-      severity: "critical",
-      message: "CPU usage above 90%",
-      triggeredAt: "5 mins ago",
-      state: "active",
-    },
-  ]);
+        // 1. Fetch resources
+        const allResources = await api.resources.getAll();
+        const resourcesArray = Array.isArray(allResources.servers) ? allResources.servers : [];
+        setResources(resourcesArray);
+
+        setResources(resourcesArray);
+
+        // 2. Fetch latest metrics for all resources
+        const resourceIds = resourcesArray.map((res) => res.id);
+        const latestMetrics = await api.metrics.getLatest(resourceIds);
+        setMetrics(latestMetrics || {});
+
+        // 3. Fetch incidents
+        const activeIncidents = await api.alerts.getIncidents({ state: "active" });
+        const incidentsArray = Array.isArray(activeIncidents) ? activeIncidents : [];
+        setIncidents(incidentsArray);
+
+      } catch (err) {
+        console.error("Dashboard data fetch error:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  // Prepare stats dynamically from fetched resources/metrics
+  const stats = {
+    totalServers: resources.filter(r => r.type === "server").length,
+    totalWebsites: resources.filter(r => r.type === "website").length,
+    totalNetworks: resources.filter(r => r.type === "network").length,
+    totalDatabases: resources.filter(r => r.type === "database").length,
+    activeIncidents: incidents.length,
+    uptime: calculateUptime(metrics), // you can implement a helper function
+  };
 
   return (
     <div className="flex h-screen bg-zinc-950">
       <Sidebar />
-
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header />
-
         <main className="flex-1 overflow-auto bg-zinc-950 p-6">
           {/* Stats Overview */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
@@ -86,6 +76,7 @@ export default function Dashboard() {
               trend="up"
               trendValue="100%"
               status="online"
+              onClick={() => router.push("/servers")}
             />
             <StatsCard
               title="Websites"
@@ -94,6 +85,7 @@ export default function Dashboard() {
               trend="up"
               trendValue="100%"
               status="online"
+              onClick={() => router.push("/websites")}
             />
             <StatsCard
               title="Networks"
@@ -102,6 +94,7 @@ export default function Dashboard() {
               trend="stable"
               trendValue="100%"
               status="online"
+              onClick={() => router.push("/networks")}
             />
             <StatsCard
               title="Databases"
@@ -110,14 +103,15 @@ export default function Dashboard() {
               trend="down"
               trendValue="66%"
               status="warning"
+              onClick={() => router.push("/databases")}
             />
             <StatsCard
               title="Incidents"
               value={stats.activeIncidents}
               icon={<AlertTriangle className="h-4 w-4" />}
               trend="down"
-              trendValue="+2"
-              status="critical"
+              trendValue={`+${stats.activeIncidents}`}
+              status={stats.activeIncidents > 0 ? "critical" : "online"}
             />
             <StatsCard
               title="Uptime"
@@ -131,7 +125,7 @@ export default function Dashboard() {
 
           {/* Main Content Grid */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Resources List - 2 columns wide */}
+            {/* Resources */}
             <div className="xl:col-span-2 space-y-6">
               <div className="bg-zinc-900 rounded-lg border border-zinc-800">
                 <div className="p-4 border-b border-zinc-800">
@@ -141,14 +135,13 @@ export default function Dashboard() {
                 <ResourceList resources={resources} />
               </div>
 
-              {/* Real-time Chart */}
               <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
                 <h2 className="text-lg font-semibold text-zinc-100 mb-4">System Metrics</h2>
-                <RealtimeChart />
+                <RealtimeChart metrics={metrics} />
               </div>
             </div>
 
-            {/* Incidents Panel - 1 column wide */}
+            {/* Incidents */}
             <div className="space-y-6">
               <div className="bg-zinc-900 rounded-lg border border-zinc-800">
                 <div className="p-4 border-b border-zinc-800">
@@ -161,57 +154,21 @@ export default function Dashboard() {
                 </div>
                 <IncidentList incidents={incidents} />
               </div>
-
-              {/* Quick Actions */}
-              <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                <h3 className="text-sm font-semibold text-zinc-100 mb-3">Quick Actions</h3>
-                <div className="space-y-2">
-                  <button className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-md transition-colors">
-                    Add New Server
-                  </button>
-                  <button className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-md transition-colors">
-                    Add Website Monitor
-                  </button>
-                  <button className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-md transition-colors">
-                    Configure Alerts
-                  </button>
-                  <button className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-md transition-colors">
-                    Download Agent
-                  </button>
-                </div>
-              </div>
-
-              {/* System Health */}
-              <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                <h3 className="text-sm font-semibold text-zinc-100 mb-3">System Health</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">API Status</span>
-                    <div className="flex items-center gap-1">
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      <span className="text-sm text-green-500">Operational</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Data Ingestion</span>
-                    <div className="flex items-center gap-1">
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      <span className="text-sm text-green-500">Running</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Alert Engine</span>
-                    <div className="flex items-center gap-1">
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      <span className="text-sm text-green-500">Active</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </main>
       </div>
     </div>
   );
+}
+
+// Example helper for uptime calculation from metrics
+function calculateUptime(metricsData: any) {
+  // Compute an average uptime from all server metrics
+  if (!metricsData || Object.keys(metricsData).length === 0) return 0;
+  const uptimes = Object.values(metricsData)
+    .map((m: any) => m.uptime)
+    .filter((v: any) => typeof v === "number");
+  if (!uptimes.length) return 0;
+  return (uptimes.reduce((a: number, b: number) => a + b, 0) / uptimes.length).toFixed(2);
 }

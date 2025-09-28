@@ -104,14 +104,61 @@ const resourceRoutes: FastifyPluginAsync = async (fastify) => {
       })),
     });
   });
+  // List all server resources with latest metrics
+fastify.get('/servers', {
+  onRequest: [fastify.authenticate],
+}, async (request: any, reply) => {
+  const userId = request.user.id;
 
+  const result = await query(
+    `
+    SELECT r.id, r.name, r.display_name, r.status, r.tags, r.created_at, r.updated_at,
+           s.hostname, s.ip_address,
+           m.cpu_usage_percent, m.memory_usage_percent, m.disk_usage_percent, m.time as last_reported
+    FROM ankercloud.resources r
+    JOIN ankercloud.servers s ON r.id = s.resource_id
+    LEFT JOIN LATERAL (
+      SELECT cpu_usage_percent, memory_usage_percent, disk_usage_percent, time
+      FROM ankercloud.server_metrics
+      WHERE resource_id = r.id
+      ORDER BY time DESC
+      LIMIT 1
+    ) m ON TRUE
+    WHERE r.user_id = $1 AND r.type = 'server' AND r.is_active = true
+    ORDER BY r.created_at DESC
+    `,
+    [userId]
+  );
+
+  return reply.send({
+    servers: result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      displayName: row.display_name,
+      status: row.status,
+      tags: row.tags,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      hostname: row.hostname,
+      ipAddress: row.ip_address,
+      metrics: row.last_reported
+        ? {
+            cpu: row.cpu_usage_percent,
+            memory: row.memory_usage_percent,
+            disk: row.disk_usage_percent,
+            lastReported: row.last_reported,
+          }
+        : null,
+    })),
+  });
+});
+  
   // Get single resource
   fastify.get('/:id', {
     onRequest: [fastify.authenticate],
   }, async (request: any, reply) => {
     const userId = request.user.id;
     const resourceId = request.params.id;
-
     const result = await query(
       `SELECT r.*,
         CASE
