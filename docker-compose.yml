@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: ankercloud_monitoring
       POSTGRES_USER: ankercloud
-      POSTGRES_PASSWORD: ankercloud_secret
+      POSTGRES_PASSWORD: anker1261
     ports:
       - "5432:5432"
     volumes:

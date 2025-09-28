@@ -162,9 +162,9 @@ fastify.get('/servers', {
     const result = await query(
       `SELECT r.*,
         CASE
-          WHEN r.type = 'server' THEN row_to_json(s.*)
-          WHEN r.type = 'website' THEN row_to_json(w.*)
-          WHEN r.type = 'network' THEN row_to_json(n.*)
+          WHEN r.type = 'server' THEN row_to_json(s)
+          WHEN r.type = 'website' THEN row_to_json(w)
+          WHEN r.type = 'network' THEN row_to_json(n)
         END as details
       FROM ankercloud.resources r
       LEFT JOIN ankercloud.servers s ON r.id = s.resource_id

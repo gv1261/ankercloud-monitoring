@@ -7,8 +7,8 @@ import { AuthProvider } from "@/contexts/AuthContext";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AnkerCloud Monitoring - Light Dashboard",
-  description: "Enterprise monitoring platform with light theme",
+  title: "AnkerCloud Monitoring",
+  description: "Enterprise monitoring platform",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

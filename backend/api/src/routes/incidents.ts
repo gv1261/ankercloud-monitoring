@@ -12,8 +12,8 @@ const incidentsRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Fetch incidents (no resource_name)
     const incidentsQuery = request.user.role === 'admin'
-      ? `SELECT id, severity, message, triggered_at, state 
-         FROM ankercloud.incidents 
+      ? `SELECT id, severity, message, triggered_at, state
+         FROM ankercloud.incidents
          ORDER BY triggered_at DESC`
       : `SELECT id, severity, message, triggered_at, state 
          FROM ankercloud.incidents 

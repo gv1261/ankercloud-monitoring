@@ -33,6 +33,7 @@ export async function getRedis(): Promise<Redis> {
   return redis;
 }
 
+// Pub/Sub clients
 export async function getPubClient(): Promise<Redis> {
   if (!pubClient) {
     pubClient = new Redis(config.redis.url);
@@ -49,15 +50,15 @@ export async function getSubClient(): Promise<Redis> {
   return subClient;
 }
 
+// Cache helpers
 export async function getCached<T>(key: string): Promise<T | null> {
   const client = await getRedis();
   const value = await client.get(key);
   if (!value) return null;
-
   try {
-    return JSON.parse(value) as T;
+    return JSON.parse(value);
   } catch {
-    return value as unknown as T;
+    return value as T;
   }
 }
 
@@ -81,6 +82,7 @@ export async function deleteCached(key: string): Promise<void> {
   await client.del(key);
 }
 
+// Queue helpers
 export async function pushToQueue(queue: string, data: any): Promise<void> {
   const client = await getRedis();
   await client.rpush(queue, JSON.stringify(data));
@@ -90,7 +92,6 @@ export async function popFromQueue(queue: string): Promise<any | null> {
   const client = await getRedis();
   const data = await client.lpop(queue);
   if (!data) return null;
-
   try {
     return JSON.parse(data);
   } catch {
@@ -98,34 +99,27 @@ export async function popFromQueue(queue: string): Promise<any | null> {
   }
 }
 
-// Stream helpers
+// Stream helpers for real-time metrics
 export async function addToStream(
   stream: string,
   data: Record<string, string>
 ): Promise<string> {
+  if (!stream) throw new Error("Stream name is required");
   const client = await getRedis();
-  if (!stream) throw new Error('Stream name is required');
-
-  // Spread fields for xadd
-  const fields: string[] = [];
-  Object.entries(data).forEach(([key, value]) => {
-    fields.push(key, value);
-  });
-
+  const fields = Object.entries(data).flat().map(String);
   return client.xadd(stream, '*', ...fields);
 }
 
 export async function readFromStream(
   stream: string,
   lastId: string = '0'
-): Promise<Array<Record<string, string> & { id: string }>> {
+): Promise<any[]> {
   const client = await getRedis();
   const results = await client.xread('BLOCK', 1000, 'STREAMS', stream, lastId);
-
   if (!results || results.length === 0) return [];
 
   return results[0][1].map(([id, fields]: [string, string[]]) => {
-    const data: Record<string, string> & { id: string } = { id };
+    const data: Record<string, string> = { id };
     for (let i = 0; i < fields.length; i += 2) {
       data[fields[i]] = fields[i + 1];
     }
@@ -133,18 +127,9 @@ export async function readFromStream(
   });
 }
 
-export async function closeRedis(): Promise<void> {
-  if (redis) {
-    await redis.quit();
-    redis = null;
-  }
-  if (pubClient) {
-    await pubClient.quit();
-    pubClient = null;
-  }
-  if (subClient) {
-    await subClient.quit();
-    subClient = null;
-  }
+export async function closeRedis() {
+  if (redis) { await redis.quit(); redis = null; }
+  if (pubClient) { await pubClient.quit(); pubClient = null; }
+  if (subClient) { await subClient.quit(); subClient = null; }
   logger.info('Redis connections closed');
 }

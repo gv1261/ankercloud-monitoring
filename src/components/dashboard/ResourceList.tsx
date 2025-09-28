@@ -30,14 +30,8 @@ export function ResourceList() {
       try {
         if (!user) return;
 
-        // fetch servers with metrics
-        const res = await fetch("http://localhost:3001/api/resources/servers", {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("authToken")}`,
-          },
-        });
-
-        const data = await res.json();
+         // use centralized API client
+         const data = await api.resources.getAll({ type: "server" });
 
         // Map backend response -> frontend Resource type
         const mappedResources: Resource[] = (data.servers || []).map((r: any) => ({
